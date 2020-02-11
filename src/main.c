@@ -75,7 +75,7 @@ static xSemaphoreHandle xEventSemaphore = NULL;
 static volatile uint32_t ulCountOfTimerCallbackExecutions = 0;
 static volatile uint32_t ulCountOfItemsReceivedOnQueue = 0;
 static volatile uint32_t ulCountOfReceivedSemaphores = 0;
-
+static void ADC_Handler(void *pvParameters);
 /*-----------------------------------------------------------*/
 
 int main(void)
@@ -86,6 +86,7 @@ xTimerHandle xExampleSoftwareTimer = NULL;
 	can be done here if it was not done before main() was called. */
 	prvSetupHardware();
 
+	MiddlewareHandler();
 
 	/* Create the queue used by the queue send and queue receive tasks.
 	http://www.freertos.org/a00116.html */
@@ -111,6 +112,7 @@ xTimerHandle xExampleSoftwareTimer = NULL;
 					mainQUEUE_RECEIVE_TASK_PRIORITY,/* The priority to assign to the task.  tskIDLE_PRIORITY (which is 0) is the lowest priority.  configMAX_PRIORITIES - 1 is the highest priority. */
 					NULL );							/* Used to obtain a handle to the created task.  Not used in this simple demo, so set to NULL. */
 
+	xTaskCreate( ADC_Handler, "ADC", configMINIMAL_STACK_SIZE, NULL, mainQUEUE_RECEIVE_TASK_PRIORITY, NULL);
 
 	/* Create the queue send task in exactly the same way.  Again, this is
 	described in the comments at the top of the file. */
@@ -150,9 +152,6 @@ xTimerHandle xExampleSoftwareTimer = NULL;
 	/* Start the tasks and timer running. */
 	vTaskStartScheduler();
 
-	/*Start the ADC */
-	ADCInit();
-
 	/* If all is well, the scheduler will now be running, and the following line
 	will never be reached.  If the following line does execute, then there was
 	insufficient FreeRTOS heap memory available for the idle and/or timer tasks
@@ -160,6 +159,13 @@ xTimerHandle xExampleSoftwareTimer = NULL;
 	for more details.  http://www.freertos.org/a00111.html */
 	for( ;; );
 }
+void ADC_Handler(void *pvParameters){
+	for(;;){
+		read_adc();
+	}
+}
+
+
 /*-----------------------------------------------------------*/
 
 static void vExampleTimerCallback( xTimerHandle xTimer )
