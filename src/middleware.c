@@ -2,26 +2,49 @@
 #include "IncludeFile.h"
 
 volatile float ADC_val;
+
 //Use PA1
+void GPIO_Output(void){
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
+//	GPIOA->CRL |=
+	GPIO_InitTypeDef GPIO_InitStruct;
+
+	GPIO_StructInit(&GPIO_InitStruct); //default parameters
+	GPIO_InitStruct.GPIO_Pin = GPIO_Pin_1 | GPIO_Pin_2;
+	GPIO_InitStruct.GPIO_Mode = GPIO_Mode_AN;//analog mode
+	GPIO_InitStruct.GPIO_PuPd = GPIO_PuPd_NOPULL;// no pullup/pulldown
+	GPIO_Init(GPIOA, &GPIO_InitStruct);
+}
+
 void ADCInit(void){
 	//GPIO stuff
-	RCC->AHB1ENR |= RCC_AHB1Periph_GPIOA;
 
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
+//	GPIOA->CRL |=
 	GPIO_InitTypeDef GPIO_InitStruct;
-	GPIO_StructInit(&GPIO_InitStruct); //default parameters
-	GPIO_InitStruct.GPIO_Mode = GPIO_Mode_AN;//analog mode
-	GPIO_InitStruct.GPIO_Speed = GPIO_Speed_50MHz; //max speed
-	GPIO_InitStruct.GPIO_OType = GPIO_OType_PP; //output type push pull
-	GPIO_InitStruct.GPIO_PuPd = GPIO_PuPd_NOPULL;// no pullup/pulldown
 
+	GPIO_StructInit(&GPIO_InitStruct); //default parameters
+	GPIO_InitStruct.GPIO_Pin = GPIO_Pin_1 | GPIO_Pin_2;
+	GPIO_InitStruct.GPIO_Mode = GPIO_Mode_AN;//analog mode
+	GPIO_InitStruct.GPIO_PuPd = GPIO_PuPd_NOPULL;// no pullup/pulldown
 	GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-	//ADC stuff
-	RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
-	ADC1->CR2 |= ADC_CR2_CONT | ADC_CR2_DMA | ADC_CR2_DDS;
-	ADC1->CR1 |= ((uint32_t)0x04000000); //8-bit res
-	ADC1->CR2 |= ADC_CR2_ADON;//adc on
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
+	ADC_DeInit();
 
+	ADC_InitTypeDef ADC_InitStruct;
+
+	ADC_InitStruct.ADC_ContinuousConvMode=ENABLE;
+	ADC_InitStruct.ADC_ScanConvMode=DISABLE;
+	ADC_InitStruct.ADC_ExternalTrigConv=ADC_ExternalTrigConv_T1_CC1;
+	ADC_InitStruct.ADC_ExternalTrigConvEdge = ADC_ExternalTrigConvEdge_None;
+	ADC_InitStruct.ADC_DataAlign = ADC_DataAlign_Right;
+	ADC_InitStruct.ADC_NbrOfConversion = 0x01;
+
+	ADC_Init(ADC1, &ADC_InitStruct);
+	ADC_Cmd(ADC1, ENABLE);
+
+	ADC_RegularChannelConfig(ADC1, ADC_Channel_1, 1, ADC_SampleTime_144Cycles);
 
 }
 
@@ -36,8 +59,8 @@ void DMAInit(void){
 }
 
 void MiddlewareHandler(void){
-	DMAInit();
 	ADCInit();
+	DMAInit();
 
 	ADC1->CR2 |= ADC_CR2_SWSTART;// start conversions
 }
@@ -45,7 +68,8 @@ void MiddlewareHandler(void){
 
 
 float read_adc(void){
-	printf("ADC %0.6f\n", ADC_val);
+
+	printf("%u\n", ADC1->DR);
 
 	return ADC_val;
 }

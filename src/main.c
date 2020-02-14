@@ -1,21 +1,8 @@
 
 /* Standard includes. */
-#include <middleware.h>
-#include <stdint.h>
-#include <stdio.h>
+#include "IncludeFile.h"
 
-/* Kernel includes. */
-#include "stm32f4xx.h"
-#include "../FreeRTOS_Source/include/FreeRTOS.h"
-#include "../FreeRTOS_Source/include/queue.h"
-#include "../FreeRTOS_Source/include/semphr.h"
-#include "../FreeRTOS_Source/include/task.h"
-#include "../FreeRTOS_Source/include/timers.h"
-
-
-/* Priorities at which the tasks are created.  The event semaphore task is
-given the maximum priority of ( configMAX_PRIORITIES - 1 ) to ensure it runs as
-soon as the semaphore is given. */
+/* Priorities at which the tasks are created. */
 #define mainQUEUE_RECEIVE_TASK_PRIORITY		( tskIDLE_PRIORITY + 2 )
 #define	mainQUEUE_SEND_TASK_PRIORITY		( tskIDLE_PRIORITY + 1 )
 #define mainEVENT_SEMAPHORE_TASK_PRIORITY	( configMAX_PRIORITIES - 1 )// configMAX_PRIORITIES = 5
@@ -75,7 +62,7 @@ static xSemaphoreHandle xEventSemaphore = NULL;
 static volatile uint32_t ulCountOfTimerCallbackExecutions = 0;
 static volatile uint32_t ulCountOfItemsReceivedOnQueue = 0;
 static volatile uint32_t ulCountOfReceivedSemaphores = 0;
-static void ADC_Handler(void *pvParameters);
+
 /*-----------------------------------------------------------*/
 
 int main(void)
@@ -85,8 +72,6 @@ xTimerHandle xExampleSoftwareTimer = NULL;
 	/* Configure the system ready to run the demo.  The clock configuration
 	can be done here if it was not done before main() was called. */
 	prvSetupHardware();
-
-	MiddlewareHandler();
 
 	/* Create the queue used by the queue send and queue receive tasks.
 	http://www.freertos.org/a00116.html */
@@ -102,7 +87,14 @@ xTimerHandle xExampleSoftwareTimer = NULL;
 	/* Add to the registry, for the benefit of kernel aware debugging. */
 	vQueueAddToRegistry( xEventSemaphore, "xEventSemaphore" );
 
-
+//	xTaskCreate(	moveCarsTask,
+//					"Move_cars",
+//					co
+//
+//
+//
+//
+//						);
 	/* Create the queue receive task as described in the comments at the top
 	of this	file.  http://www.freertos.org/a00125.html */
 	xTaskCreate( 	prvQueueReceiveTask,			/* The function that implements the task. */
@@ -112,7 +104,6 @@ xTimerHandle xExampleSoftwareTimer = NULL;
 					mainQUEUE_RECEIVE_TASK_PRIORITY,/* The priority to assign to the task.  tskIDLE_PRIORITY (which is 0) is the lowest priority.  configMAX_PRIORITIES - 1 is the highest priority. */
 					NULL );							/* Used to obtain a handle to the created task.  Not used in this simple demo, so set to NULL. */
 
-	xTaskCreate( ADC_Handler, "ADC", configMINIMAL_STACK_SIZE, NULL, mainQUEUE_RECEIVE_TASK_PRIORITY, NULL);
 
 	/* Create the queue send task in exactly the same way.  Again, this is
 	described in the comments at the top of the file. */
@@ -148,7 +139,6 @@ xTimerHandle xExampleSoftwareTimer = NULL;
 	be created, and it is not yet running).
 	http://www.freertos.org/FreeRTOS-timers-xTimerStart.html */
 	xTimerStart( xExampleSoftwareTimer, 0 );
-
 	/* Start the tasks and timer running. */
 	vTaskStartScheduler();
 
@@ -159,12 +149,6 @@ xTimerHandle xExampleSoftwareTimer = NULL;
 	for more details.  http://www.freertos.org/a00111.html */
 	for( ;; );
 }
-void ADC_Handler(void *pvParameters){
-	for(;;){
-		read_adc();
-	}
-}
-
 
 /*-----------------------------------------------------------*/
 
@@ -187,7 +171,6 @@ const uint32_t ulValueToSend = 100UL;
 
 	for( ;; )
 	{
-		read_adc();
 //		write_LED();
 		/* Place this task in the blocked state until it is time to run again.
 		The block time is specified in ticks, the constant used converts ticks
@@ -259,6 +242,7 @@ static uint32_t ulCount = 0;
 		pdTRUE by xSemaphoreGiveFromISR() if giving the semaphore unblocked a
 		task that has equal or higher priority than the interrupted task.
 		http://www.freertos.org/a00124.html */
+		read_adc();
 		xSemaphoreGiveFromISR( xEventSemaphore, &xHigherPriorityTaskWoken );
 		ulCount = 0UL;
 	}
@@ -283,7 +267,7 @@ void vApplicationMallocFailedHook( void )
 
 	Called if a call to pvPortMalloc() fails because there is insufficient
 	free memory available in the FreeRTOS heap.  pvPortMalloc() is called
-	internally by FreeRTOS API functions that create tasks, queues, software 
+	internally by FreeRTOS API functions that create tasks, queues, software
 	timers, and semaphores.  The size of the FreeRTOS heap is set by the
 	configTOTAL_HEAP_SIZE configuration constant in FreeRTOSConfig.h. */
 	for( ;; );
@@ -331,6 +315,7 @@ static void prvSetupHardware( void )
 	/* Ensure all priority bits are assigned as preemption priority bits.
 	http://www.freertos.org/RTOS-Cortex-M3-M4.html */
 	NVIC_SetPriorityGrouping( 0 );
+	MiddlewareHandler();
 
 	/* TODO: Setup the clocks, etc. here, if they were not configured before
 	main() was called. */
