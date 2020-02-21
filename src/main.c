@@ -65,10 +65,20 @@ static volatile uint32_t ulCountOfReceivedSemaphores = 0;
 
 /*-----------------------------------------------------------*/
 
-int main(void)
-{
-xTimerHandle xExampleSoftwareTimer = NULL;
+#define carQUEUE_LENGTH									( 19 ) // cars entering
+static xQueueHandle carQueue = NULL;
+static void moveLEDcarsTask( void *pvParameters);
+/* ADC is stored here by DMA */
+volatile float ADC_input;
+typedef struct ShiftRegister_Message{
+	uint32_t CarPosition;
+}ShiftRegister_Message;
+static void vShiftRegisterClear( xTimerHandle xTimer );
 
+
+int main(void) {
+xTimerHandle xExampleSoftwareTimer = NULL;
+xTimerHandle xShiftRegisterTimer = NULL;
 	/* Configure the system ready to run the demo.  The clock configuration
 	can be done here if it was not done before main() was called. */
 	prvSetupHardware();
@@ -77,8 +87,11 @@ xTimerHandle xExampleSoftwareTimer = NULL;
 	http://www.freertos.org/a00116.html */
 	xQueue = xQueueCreate( 	mainQUEUE_LENGTH,		/* The number of items the queue can hold. */
 							sizeof( uint32_t ) );	/* The size of each item the queue holds. */
+	// carQUEUE holds 19 cars with each car size of 32 bits
+	carQueue = xQueueCreate(carQUEUE_LENGTH, sizeof( uint32_t ));
 	/* Add to the registry, for the benefit of kernel aware debugging. */
 	vQueueAddToRegistry( xQueue, "MainQueue" );
+	vQueueAddToRegistry( carQueue, "CarQueue" );
 
 
 	/* Create the semaphore used by the FreeRTOS tick hook function and the
@@ -87,58 +100,42 @@ xTimerHandle xExampleSoftwareTimer = NULL;
 	/* Add to the registry, for the benefit of kernel aware debugging. */
 	vQueueAddToRegistry( xEventSemaphore, "xEventSemaphore" );
 
-//	xTaskCreate(	moveCarsTask,
-//					"Move_cars",
-//					co
-//
-//
-//
-//
-//						);
+	xTaskCreate(moveLEDcarsTask, 
+				"Cars", 
+				configMINIMAL_STACK_SIZE, 
+				(void *) carQueue, 
+				0, 
+				NULL);
 	/* Create the queue receive task as described in the comments at the top
 	of this	file.  http://www.freertos.org/a00125.html */
-	xTaskCreate( 	prvQueueReceiveTask,			/* The function that implements the task. */
-					"Rx", 		/* Text name for the task, just to help debugging. */
-					configMINIMAL_STACK_SIZE, 		/* The size (in words) of the stack that should be created for the task. */
-					NULL, 							/* A parameter that can be passed into the task.  Not used in this simple demo. */
-					mainQUEUE_RECEIVE_TASK_PRIORITY,/* The priority to assign to the task.  tskIDLE_PRIORITY (which is 0) is the lowest priority.  configMAX_PRIORITIES - 1 is the highest priority. */
-					NULL );							/* Used to obtain a handle to the created task.  Not used in this simple demo, so set to NULL. */
+	xTaskCreate( 	prvQueueReceiveTask,			/* The function that implements the task. */"Rx", 		/* Text name for the task, just to help debugging. */configMINIMAL_STACK_SIZE, 		/* The size (in words) of the stack that should be created for the task. */NULL, 							/* A parameter that can be passed into the task.  Not used in this simple demo. */mainQUEUE_RECEIVE_TASK_PRIORITY,/* The priority to assign to the task.  tskIDLE_PRIORITY (which is 0) is the lowest priority.  configMAX_PRIORITIES - 1 is the highest priority. */NULL );							/* Used to obtain a handle to the created task.  Not used in this simple demo, so set to NULL. */
 
 
 	/* Create the queue send task in exactly the same way.  Again, this is
 	described in the comments at the top of the file. */
-	xTaskCreate( 	prvQueueSendTask,
-					"TX",
-					configMINIMAL_STACK_SIZE,
-					NULL,
-					mainQUEUE_SEND_TASK_PRIORITY,
-					NULL );
+	xTaskCreate( 	prvQueueSendTask,"TX",configMINIMAL_STACK_SIZE,NULL,mainQUEUE_SEND_TASK_PRIORITY,NULL );
 
 
 	/* Create the task that is synchronised with an interrupt using the
 	xEventSemaphore semaphore. */
-	xTaskCreate( 	prvEventSemaphoreTask,
-					"Sem",
-					configMINIMAL_STACK_SIZE,
-					NULL,
-					mainEVENT_SEMAPHORE_TASK_PRIORITY,
-					NULL );
+	xTaskCreate( 	prvEventSemaphoreTask,"Sem",configMINIMAL_STACK_SIZE,NULL,mainEVENT_SEMAPHORE_TASK_PRIORITY,NULL );
 
 
 	/* Create the software timer as described in the comments at the top of
 	this file.  http://www.freertos.org/FreeRTOS-timers-xTimerCreate.html. */
-	xExampleSoftwareTimer = xTimerCreate("LEDTimer", /* A text name, purely to help debugging. */
-								mainSOFTWARE_TIMER_PERIOD_MS,		/* The timer period, in this case 1000ms (1s). */
-								pdTRUE,								/* This is a periodic timer, so xAutoReload is set to pdTRUE. */
-								( void * ) 0,						/* The ID is not used, so can be set to anything. */
-								vExampleTimerCallback				/* The callback function that switches the LED off. */
-							);
-
+	xExampleSoftwareTimer = xTimerCreate("LEDTimer", /* A text name, purely to help debugging. */mainSOFTWARE_TIMER_PERIOD_MS,		/* The timer period, in this case 1000ms (1s). */pdTRUE,								/* This is a periodic timer, so xAutoReload is set to pdTRUE. */( void * ) 0,						/* The ID is not used, so can be set to anything. */vExampleTimerCallback				/* The callback function that switches the LED off. */);
+	xShiftRegisterTimer = xTimerCreate("ShiftRegisterTimer",
+	 									mainSOFTWARE_TIMER_PERIOD_MS, //1s
+										pdTRUE,	
+										( void * ) 0,
+										vShiftRegisterClear
+										);
 	/* Start the created timer.  A block time of zero is used as the timer
 	command queue cannot possibly be full here (this is the first timer to
 	be created, and it is not yet running).
 	http://www.freertos.org/FreeRTOS-timers-xTimerStart.html */
 	xTimerStart( xExampleSoftwareTimer, 0 );
+	xTimerStart( xShiftRegisterTimer, 0 );
 	/* Start the tasks and timer running. */
 	vTaskStartScheduler();
 
@@ -151,6 +148,29 @@ xTimerHandle xExampleSoftwareTimer = NULL;
 }
 
 /*-----------------------------------------------------------*/
+
+static void moveLEDcarsTask( void *pvParameters){
+	QueueHandle_t carQueue = (QueueHandle_t) pvParameters;
+	ShiftRegister_Message xMessage;
+	//uint32_t cars = 0xB8A5C444;
+	xMessage.CarPosition = 0xB8A5C444;
+	// Push sample bits to a queue. wait 1s if full
+	xQueueSendToFront(carQueue, &xMessage, 1000);
+	for(;;){
+		//shift in 1 bit at a time
+	}
+}
+static void vShiftRegisterClear( xTimerHandle xTimer ){
+	/* Reset the shift registers */
+	Clear_ShiftRegisters();
+}
+
+
+
+
+
+
+
 
 static void vExampleTimerCallback( xTimerHandle xTimer )
 {
@@ -242,7 +262,6 @@ static uint32_t ulCount = 0;
 		pdTRUE by xSemaphoreGiveFromISR() if giving the semaphore unblocked a
 		task that has equal or higher priority than the interrupted task.
 		http://www.freertos.org/a00124.html */
-		read_adc();
 		xSemaphoreGiveFromISR( xEventSemaphore, &xHigherPriorityTaskWoken );
 		ulCount = 0UL;
 	}
@@ -315,7 +334,7 @@ static void prvSetupHardware( void )
 	/* Ensure all priority bits are assigned as preemption priority bits.
 	http://www.freertos.org/RTOS-Cortex-M3-M4.html */
 	NVIC_SetPriorityGrouping( 0 );
-	MiddlewareHandler();
+	MiddlewareHandler(&ADC_input);
 
 	/* TODO: Setup the clocks, etc. here, if they were not configured before
 	main() was called. */
