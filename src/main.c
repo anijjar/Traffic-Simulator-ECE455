@@ -1,6 +1,18 @@
 
 /* Standard includes. */
-#include "IncludeFile.h"
+#include <stdint.h>
+#include <stdio.h>
+#include "stm32f4_discovery.h"
+#include "middleware.h"
+
+/* Kernel includes. */
+#include "stm32f4xx.h"
+#include "../FreeRTOS_Source/include/FreeRTOS.h"
+#include "../FreeRTOS_Source/include/queue.h"
+#include "../FreeRTOS_Source/include/semphr.h"
+#include "../FreeRTOS_Source/include/task.h"
+#include "../FreeRTOS_Source/include/timers.h"
+
 
 /* Priorities at which the tasks are created. */
 #define mainQUEUE_RECEIVE_TASK_PRIORITY		( tskIDLE_PRIORITY + 2 )
@@ -69,7 +81,7 @@ static volatile uint32_t ulCountOfReceivedSemaphores = 0;
 static xQueueHandle carQueue = NULL;
 static void moveLEDcarsTask( void *pvParameters);
 /* ADC is stored here by DMA */
-volatile float ADC_input;
+float ADC_input;
 typedef struct ShiftRegister_Message{
 	uint32_t CarPosition;
 }ShiftRegister_Message;
@@ -77,8 +89,7 @@ static void vShiftRegisterClear( xTimerHandle xTimer );
 
 
 int main(void) {
-xTimerHandle xExampleSoftwareTimer = NULL;
-xTimerHandle xShiftRegisterTimer = NULL;
+ xTimerHandle xExampleSoftwareTimer = NULL;
 	/* Configure the system ready to run the demo.  The clock configuration
 	can be done here if it was not done before main() was called. */
 	prvSetupHardware();
@@ -124,18 +135,12 @@ xTimerHandle xShiftRegisterTimer = NULL;
 	/* Create the software timer as described in the comments at the top of
 	this file.  http://www.freertos.org/FreeRTOS-timers-xTimerCreate.html. */
 	xExampleSoftwareTimer = xTimerCreate("LEDTimer", /* A text name, purely to help debugging. */mainSOFTWARE_TIMER_PERIOD_MS,		/* The timer period, in this case 1000ms (1s). */pdTRUE,								/* This is a periodic timer, so xAutoReload is set to pdTRUE. */( void * ) 0,						/* The ID is not used, so can be set to anything. */vExampleTimerCallback				/* The callback function that switches the LED off. */);
-	xShiftRegisterTimer = xTimerCreate("ShiftRegisterTimer",
-	 									mainSOFTWARE_TIMER_PERIOD_MS, //1s
-										pdTRUE,	
-										( void * ) 0,
-										vShiftRegisterClear
-										);
+
 	/* Start the created timer.  A block time of zero is used as the timer
 	command queue cannot possibly be full here (this is the first timer to
 	be created, and it is not yet running).
 	http://www.freertos.org/FreeRTOS-timers-xTimerStart.html */
 	xTimerStart( xExampleSoftwareTimer, 0 );
-	xTimerStart( xShiftRegisterTimer, 0 );
 	/* Start the tasks and timer running. */
 	vTaskStartScheduler();
 
@@ -152,17 +157,13 @@ xTimerHandle xShiftRegisterTimer = NULL;
 static void moveLEDcarsTask( void *pvParameters){
 	QueueHandle_t carQueue = (QueueHandle_t) pvParameters;
 	ShiftRegister_Message xMessage;
-	//uint32_t cars = 0xB8A5C444;
+	uint16_t cars = 0b1;
 	xMessage.CarPosition = 0xB8A5C444;
 	// Push sample bits to a queue. wait 1s if full
 	xQueueSendToFront(carQueue, &xMessage, 1000);
 	for(;;){
-		//shift in 1 bit at a time
+		SPI_Bus_tx(&cars);
 	}
-}
-static void vShiftRegisterClear( xTimerHandle xTimer ){
-	/* Reset the shift registers */
-	Clear_ShiftRegisters();
 }
 
 
