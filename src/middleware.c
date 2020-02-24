@@ -7,8 +7,6 @@
 
 /* Kernel includes. */
 #include "stm32f4xx.h"
-#define ENABLE  1
-#define DISABLE 0
 
 // Use PA1
 static void ADCInit(float *ADC_destination){
@@ -57,13 +55,13 @@ static void SPIInit(void){
 	GPIO_StructInit(&GPIO_InitStruct); //default parameters
 	GPIO_InitStruct.GPIO_Pin = (GPIO_Pin_4 | GPIO_Pin_5 | GPIO_Pin_7);
 	GPIO_InitStruct.GPIO_Mode = GPIO_Mode_AF;//Alternate Function mode
-	GPIO_InitStruct.GPIO_Speed = GPIO_Speed_50MHz;
-	GPIO_InitStruct.GPIO_PuPd = GPIO_PuPd_NOPULL;// no pullup/pulldown
-	GPIO_Init(GPIOA, &GPIO_InitStruct);
+	GPIO_InitStruct.GPIO_Speed = GPIO_Speed_25MHz;
+	GPIO_InitStruct.GPIO_PuPd = GPIO_PuPd_DOWN;// no pullup/pulldown
 	GPIO_PinAFConfig(GPIOA, GPIO_PinSource4, GPIO_AF_SPI1);
 	GPIO_PinAFConfig(GPIOA, GPIO_PinSource5, GPIO_AF_SPI1);
 	GPIO_PinAFConfig(GPIOA, GPIO_PinSource7, GPIO_AF_SPI1);
 
+	GPIO_Init(GPIOA, &GPIO_InitStruct);
 	// SPI
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_SPI1, ENABLE);
 	SPI_InitTypeDef SPI_InitStruct;
@@ -71,11 +69,11 @@ static void SPIInit(void){
 	SPI_StructInit(&SPI_InitStruct);
 	SPI_InitStruct.SPI_Direction = SPI_Direction_1Line_Tx;
 	SPI_InitStruct.SPI_Mode = SPI_Mode_Master;
-	SPI_InitStruct.SPI_DataSize = SPI_DataSize_8b;
+	SPI_InitStruct.SPI_DataSize = SPI_DataSize_16b;
 	SPI_InitStruct.SPI_CPOL = SPI_CPOL_Low;
 	SPI_InitStruct.SPI_CPHA = SPI_CPHA_1Edge;
 	SPI_InitStruct.SPI_NSS = SPI_NSS_Soft;
-	SPI_InitStruct.SPI_BaudRatePrescaler = SPI_BaudRatePrescaler_256;
+	SPI_InitStruct.SPI_BaudRatePrescaler = SPI_BaudRatePrescaler_4;
 	SPI_InitStruct.SPI_FirstBit = SPI_FirstBit_MSB;
 	SPI_InitStruct.SPI_CRCPolynomial = 7;
 	SPI_Init(SPI1, &SPI_InitStruct);
@@ -96,20 +94,10 @@ extern void MiddlewareHandler(float *ADC_destination){
 	SPIInit();
 }
 
-extern void SPI_Bus_tx(uint16_t *data){
-	SPI_I2S_SendData(SPI1, *data);
+extern void SPI_Bus_tx(uint16_t data){
+	SPI1->DR = data;
 	//wait until TXE == 1
-	while( ((SPI1->SR) & SPI_I2S_FLAG_TXE) == 1){}
-}
-extern void SPI_Bus( int mode){
-	// disable
-	if(mode == 0){
-		SPI_Cmd(SPI1, 0);
-	}
-	else
-	{
-		SPI_Cmd(SPI1, 1);
-	}
+//	while( ((SPI1->SR) && SPI_I2S_FLAG_TXE) != SPI_I2S_FLAG_TXE){}
 }
 
 // This function is not required because we are using

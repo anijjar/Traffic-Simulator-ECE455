@@ -162,7 +162,7 @@ static void moveLEDcarsTask( void *pvParameters){
 	// Push sample bits to a queue. wait 1s if full
 	xQueueSendToFront(carQueue, &xMessage, 1000);
 	for(;;){
-		SPI_Bus_tx(&cars);
+		//SPI_Bus_tx(&cars);
 	}
 }
 
@@ -178,6 +178,10 @@ static void vExampleTimerCallback( xTimerHandle xTimer )
 	/* The timer has expired.  Count the number of times this happens.  The
 	timer that calls this function is an auto re-load timer, so it will
 	execute periodically. http://www.freertos.org/RTOS-software-timer.html */
+	uint16_t data = (uint16_t)14;
+	while(1){
+		SPI_Bus_tx(data);
+	}
 	ulCountOfTimerCallbackExecutions++;
 }
 /*-----------------------------------------------------------*/
