@@ -79,13 +79,6 @@ static volatile uint32_t ulCountOfReceivedSemaphores = 0;
 
 #define carQUEUE_LENGTH									( 19 ) // cars entering
 static xQueueHandle carQueue = NULL;
-static void moveLEDcarsTask( void *pvParameters);
-/* ADC is stored here by DMA */
-float ADC_input;
-typedef struct ShiftRegister_Message{
-	uint32_t CarPosition;
-}ShiftRegister_Message;
-static void vShiftRegisterClear( xTimerHandle xTimer );
 
 
 int main(void) {
@@ -111,12 +104,6 @@ int main(void) {
 	/* Add to the registry, for the benefit of kernel aware debugging. */
 	vQueueAddToRegistry( xEventSemaphore, "xEventSemaphore" );
 
-	xTaskCreate(moveLEDcarsTask, 
-				"Cars", 
-				configMINIMAL_STACK_SIZE, 
-				(void *) carQueue, 
-				0, 
-				NULL);
 	/* Create the queue receive task as described in the comments at the top
 	of this	file.  http://www.freertos.org/a00125.html */
 	xTaskCreate( 	prvQueueReceiveTask,			/* The function that implements the task. */"Rx", 		/* Text name for the task, just to help debugging. */configMINIMAL_STACK_SIZE, 		/* The size (in words) of the stack that should be created for the task. */NULL, 							/* A parameter that can be passed into the task.  Not used in this simple demo. */mainQUEUE_RECEIVE_TASK_PRIORITY,/* The priority to assign to the task.  tskIDLE_PRIORITY (which is 0) is the lowest priority.  configMAX_PRIORITIES - 1 is the highest priority. */NULL );							/* Used to obtain a handle to the created task.  Not used in this simple demo, so set to NULL. */
@@ -154,31 +141,11 @@ int main(void) {
 
 /*-----------------------------------------------------------*/
 
-static void moveLEDcarsTask( void *pvParameters){
-	QueueHandle_t carQueue = (QueueHandle_t) pvParameters;
-	ShiftRegister_Message xMessage;
-	uint16_t cars = 0b1;
-	xMessage.CarPosition = 0xB8A5C444;
-	// Push sample bits to a queue. wait 1s if full
-	xQueueSendToFront(carQueue, &xMessage, 1000);
-	for(;;){
-		//SPI_Bus_tx(&cars);
-	}
-}
-
-
-
-
-
-
-
 
 static void vExampleTimerCallback( xTimerHandle xTimer )
 {
-	/* The timer has expired.  Count the number of times this happens.  The
-	timer that calls this function is an auto re-load timer, so it will
-	execute periodically. http://www.freertos.org/RTOS-software-timer.html */
-	uint16_t data = (uint16_t)14;
+	uint16_t data = (uint16_t)1;
+
 	while(1){
 		SPI_Bus_tx(data);
 	}
@@ -339,8 +306,13 @@ static void prvSetupHardware( void )
 	/* Ensure all priority bits are assigned as preemption priority bits.
 	http://www.freertos.org/RTOS-Cortex-M3-M4.html */
 	NVIC_SetPriorityGrouping( 0 );
-	MiddlewareHandler(&ADC_input);
+	//TASK 3 - ADC Conversions
+	ADCInit();
+	ADC1->CR2 |= ADC_CR2_SWSTART;// start conversions
 
+	Clear_Init();
+	SPIInit();
+	Clear_ShiftRegisters();
 	/* TODO: Setup the clocks, etc. here, if they were not configured before
 	main() was called. */
 }
