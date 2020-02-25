@@ -1,18 +1,5 @@
-
 /* Standard includes. */
-#include <stdint.h>
-#include <stdio.h>
-#include "stm32f4_discovery.h"
-#include "middleware.h"
-
-/* Kernel includes. */
-#include "stm32f4xx.h"
-#include "../FreeRTOS_Source/include/FreeRTOS.h"
-#include "../FreeRTOS_Source/include/queue.h"
-#include "../FreeRTOS_Source/include/semphr.h"
-#include "../FreeRTOS_Source/include/task.h"
-#include "../FreeRTOS_Source/include/timers.h"
-
+#include "IncludeFile.h"
 
 /* Priorities at which the tasks are created. */
 #define mainQUEUE_RECEIVE_TASK_PRIORITY		( tskIDLE_PRIORITY + 2 )
@@ -23,9 +10,6 @@
 converted to ticks using the portTICK_RATE_MS constant. */
 #define mainQUEUE_SEND_PERIOD_MS			( 200 / portTICK_RATE_MS )
 
-/* The period of the example software timer, specified in milliseconds, and
-converted to ticks using the portTICK_RATE_MS constant. */
-#define mainSOFTWARE_TIMER_PERIOD_MS		( 1000 / portTICK_RATE_MS )
 
 /* The number of items the queue can hold.  This is 1 as the receive task
 will remove items as they are added, meaning the send task should always find
@@ -33,56 +17,29 @@ the queue empty. */
 #define mainQUEUE_LENGTH					( 1 )
 
 /*-----------------------------------------------------------*/
-
-/*
- * TODO: Implement this function for any hardware specific clock configuration
- * that was not already performed before main() was called.
- */
+/*							Prototypes						*/
 static void prvSetupHardware( void );
 
-/*
- * The queue send and receive tasks as described in the comments at the top of
- * this file.
- */
-static void prvQueueReceiveTask( void *pvParameters );
-static void prvQueueSendTask( void *pvParameters );
-
-/*
- * The callback function assigned to the example software timer as described at
- * the top of this file.
- */
-static void vExampleTimerCallback( xTimerHandle xTimer );
-
-/*
- * The event semaphore task as described at the top of this file.
- */
-static void prvEventSemaphoreTask( void *pvParameters );
+static void traffic_generator_task( void *pvParameters );
+static void pot_read_task( void *pvParameters );
+static void led_display_task( void *pvParameters );
+static void traffic_light_state_task( void *pvParameters );
 
 /*-----------------------------------------------------------*/
 
 /* The queue used by the queue send and queue receive tasks. */
 static xQueueHandle xQueue = NULL;
+static xQueueHandle xFlowQueue = NULL;
+static xQueueHandle BoardStateQueue = NULL;
 
 /* The semaphore (in this case binary) that is used by the FreeRTOS tick hook
  * function and the event semaphore task.
  */
 static xSemaphoreHandle xEventSemaphore = NULL;
-
-/* The counters used by the various examples.  The usage is described in the
- * comments at the top of this file.
- */
-static volatile uint32_t ulCountOfTimerCallbackExecutions = 0;
-static volatile uint32_t ulCountOfItemsReceivedOnQueue = 0;
-static volatile uint32_t ulCountOfReceivedSemaphores = 0;
-
 /*-----------------------------------------------------------*/
 
-#define carQUEUE_LENGTH									( 19 ) // cars entering
-static xQueueHandle carQueue = NULL;
-
-
-int main(void) {
- xTimerHandle xExampleSoftwareTimer = NULL;
+int main(void)
+{
 	/* Configure the system ready to run the demo.  The clock configuration
 	can be done here if it was not done before main() was called. */
 	prvSetupHardware();
@@ -91,12 +48,17 @@ int main(void) {
 	http://www.freertos.org/a00116.html */
 	xQueue = xQueueCreate( 	mainQUEUE_LENGTH,		/* The number of items the queue can hold. */
 							sizeof( uint32_t ) );	/* The size of each item the queue holds. */
-	// carQUEUE holds 19 cars with each car size of 32 bits
-	carQueue = xQueueCreate(carQUEUE_LENGTH, sizeof( uint32_t ));
 	/* Add to the registry, for the benefit of kernel aware debugging. */
 	vQueueAddToRegistry( xQueue, "MainQueue" );
-	vQueueAddToRegistry( carQueue, "CarQueue" );
 
+	xFlowQueue = xQueueCreate( 	mainQUEUE_LENGTH,		/* The number of items the queue can hold. */
+							sizeof( uint32_t ) );	/* The size of each item the queue holds. */
+	vQueueAddToRegistry( xFlowQueue, "FlowQueue" );
+
+
+	BoardStateQueue = xQueueCreate( 	mainQUEUE_LENGTH,		/* The number of items the queue can hold. */
+							sizeof( uint32_t ) );	/* The size of each item the queue holds. */
+	vQueueAddToRegistry( BoardStateQueue, "BoardStateQueue" );
 
 	/* Create the semaphore used by the FreeRTOS tick hook function and the
 	event semaphore task. */
@@ -106,28 +68,41 @@ int main(void) {
 
 	/* Create the queue receive task as described in the comments at the top
 	of this	file.  http://www.freertos.org/a00125.html */
-	xTaskCreate( 	prvQueueReceiveTask,			/* The function that implements the task. */"Rx", 		/* Text name for the task, just to help debugging. */configMINIMAL_STACK_SIZE, 		/* The size (in words) of the stack that should be created for the task. */NULL, 							/* A parameter that can be passed into the task.  Not used in this simple demo. */mainQUEUE_RECEIVE_TASK_PRIORITY,/* The priority to assign to the task.  tskIDLE_PRIORITY (which is 0) is the lowest priority.  configMAX_PRIORITIES - 1 is the highest priority. */NULL );							/* Used to obtain a handle to the created task.  Not used in this simple demo, so set to NULL. */
+	xTaskCreate( 	traffic_generator_task,			/* The function that implements the task. */
+					"traffic_gen_task", 		/* Text name for the task, just to help debugging. */
+					configMINIMAL_STACK_SIZE, 		/* The size (in words) of the stack that should be created for the task. */
+					NULL, 							/* A parameter that can be passed into the task.  Not used in this simple demo. */
+					mainQUEUE_RECEIVE_TASK_PRIORITY,/* The priority to assign to the task.  tskIDLE_PRIORITY (which is 0) is the lowest priority.  configMAX_PRIORITIES - 1 is the highest priority. */
+					NULL );							/* Used to obtain a handle to the created task.  Not used in this simple demo, so set to NULL. */
 
 
 	/* Create the queue send task in exactly the same way.  Again, this is
 	described in the comments at the top of the file. */
-	xTaskCreate( 	prvQueueSendTask,"TX",configMINIMAL_STACK_SIZE,NULL,mainQUEUE_SEND_TASK_PRIORITY,NULL );
+	xTaskCreate( 	pot_read_task,
+					"pot_read_task",
+					configMINIMAL_STACK_SIZE,
+					NULL,
+					mainQUEUE_SEND_TASK_PRIORITY,
+					NULL );
 
+	/* Create the queue send task in exactly the same way.  Again, this is
+	described in the comments at the top of the file. */
+	xTaskCreate( 	traffic_light_state_task,
+					"light_state_task",
+					configMINIMAL_STACK_SIZE,
+					NULL,
+					mainQUEUE_SEND_TASK_PRIORITY,
+					NULL );
 
-	/* Create the task that is synchronised with an interrupt using the
-	xEventSemaphore semaphore. */
-	xTaskCreate( 	prvEventSemaphoreTask,"Sem",configMINIMAL_STACK_SIZE,NULL,mainEVENT_SEMAPHORE_TASK_PRIORITY,NULL );
+	/* Create the queue send task in exactly the same way.  Again, this is
+	described in the comments at the top of the file. */
+	xTaskCreate( 	led_display_task,
+					"led_state_task",
+					configMINIMAL_STACK_SIZE,
+					NULL,
+					mainQUEUE_SEND_TASK_PRIORITY,
+					NULL );
 
-
-	/* Create the software timer as described in the comments at the top of
-	this file.  http://www.freertos.org/FreeRTOS-timers-xTimerCreate.html. */
-	xExampleSoftwareTimer = xTimerCreate("LEDTimer", /* A text name, purely to help debugging. */mainSOFTWARE_TIMER_PERIOD_MS,		/* The timer period, in this case 1000ms (1s). */pdTRUE,								/* This is a periodic timer, so xAutoReload is set to pdTRUE. */( void * ) 0,						/* The ID is not used, so can be set to anything. */vExampleTimerCallback				/* The callback function that switches the LED off. */);
-
-	/* Start the created timer.  A block time of zero is used as the timer
-	command queue cannot possibly be full here (this is the first timer to
-	be created, and it is not yet running).
-	http://www.freertos.org/FreeRTOS-timers-xTimerStart.html */
-	xTimerStart( xExampleSoftwareTimer, 0 );
 	/* Start the tasks and timer running. */
 	vTaskStartScheduler();
 
@@ -138,28 +113,32 @@ int main(void) {
 	for more details.  http://www.freertos.org/a00111.html */
 	for( ;; );
 }
-
 /*-----------------------------------------------------------*/
 
+static void led_display_task( void *pvParameters ){
 
-static void vExampleTimerCallback( xTimerHandle xTimer )
-{
-	uint16_t data = (uint16_t)1;
+	uint32_t board_state = 0;
 
-	while(1){
-		SPI_Bus_tx(data);
+	for( ;; ){
+		vTaskDelay(500);
+		Set_PD7();
+		xQueueReceive( BoardStateQueue, &board_state, portMAX_DELAY);
+		//we only want the first 4 bits of the board upper
+		uint16_t board_upper_bottom = (board_state & 0xFFFF0000) >> 16;
+		//board lower consists of the important 16 bits
+		uint16_t board_lower = board_state & 0xFFFF;
+		SPI_Bus_tx(board_upper_bottom);
+		vTaskDelay(5);
+		SPI_Bus_tx(board_lower);
+
+		xQueueSend( BoardStateQueue, &board_state, portMAX_DELAY);
 	}
-	ulCountOfTimerCallbackExecutions++;
+	// Basically, we are assuming the highway is 32 cars long, but
+	// we are only looking at the first 19 cars.
 }
-/*-----------------------------------------------------------*/
 
-static void prvQueueSendTask( void *pvParameters )
+static void pot_read_task( void *pvParameters )
 {
-portTickType xNextWakeTime;
-const uint32_t ulValueToSend = 100UL;
-
-	/* Initialise xNextWakeTime - this only needs to be done once. */
-	xNextWakeTime = xTaskGetTickCount();
 
 	for( ;; )
 	{
@@ -168,136 +147,180 @@ const uint32_t ulValueToSend = 100UL;
 		The block time is specified in ticks, the constant used converts ticks
 		to ms.  While in the Blocked state this task will not consume any CPU
 		time.  http://www.freertos.org/vtaskdelayuntil.html */
-		vTaskDelayUntil( &xNextWakeTime, mainQUEUE_SEND_PERIOD_MS );
+		vTaskDelay(250);
+
+		//uint32_t adc_val = read_adc();
+		//adv_val = (adc_max - adc_val)/(adc_val) --> generate relative value
+		uint32_t adc_val = 3; //med-low traffic.
 
 		/* Send to the queue - causing the queue receive task to unblock and
 		increment its counter.  0 is used as the block time so the sending
 		operation will not block - it shouldn't need to block as the queue
 		should always be empty at this point in the code. */
-		xQueueSend( xQueue, &ulValueToSend, 0 );
+		xQueueSend( xQueue, &adc_val, 0 );
 	}
 }
-/*-----------------------------------------------------------*/
 
-static void prvQueueReceiveTask( void *pvParameters )
+char display_lights(uint32_t lights){
+	//debugging purposes//
+	switch(lights){
+		case green:
+			return 'g';
+		case red:
+			return 'r';
+		case yellow:
+			return 'y';
+		default:
+			return '?';
+	}
+}
+
+static void traffic_generator_task( void *pvParameters )
 {
-uint32_t ulReceivedValue;
+	uint32_t traffic_val = 3;
+	uint32_t flow_value = 0;
+	uint32_t board_state = red;
+	uint32_t lights = red;
+	xQueueSend( BoardStateQueue, &board_state, 0);
 
 	for( ;; )
 	{
+		vTaskDelay(250);
 		/* Wait until something arrives in the queue - this task will block
 		indefinitely provided INCLUDE_vTaskSuspend is set to 1 in
 		FreeRTOSConfig.h.  http://www.freertos.org/a00118.html */
-		xQueueReceive( xQueue, &ulReceivedValue, portMAX_DELAY );
+		xQueueReceive( xQueue, &traffic_val, 0);
+		xQueueReceive( xFlowQueue, &flow_value, 0);
 
-		/*  To get here something must have been received from the queue, but
-		is it the expected value?  If it is, increment the counter. */
-		if( ulReceivedValue == 100UL )
-		{
-			/* Count the number of items that have been received correctly. */
-			ulCountOfItemsReceivedOnQueue++;
+		//Traffic value pulled off the queue, which is the value of the potentiometer.
+		xQueueReceive( BoardStateQueue, &board_state, portMAX_DELAY);
+		uint32_t traffic = generate_traffic(traffic_val, board_state);
+
+		lights = board_state & light_state;
+		char lights_value = display_lights(lights);
+
+		board_state = (lights) | traffic;
+
+		if(traffic & 1){
+			//new car, increment flow.
+			flow_value++;
+		}else{
+			flow_value--;
 		}
+
+		printf("Lights: %c Flow: %lu Traffic: %lu\n", lights_value, flow_value, traffic);
+
+		//send flow value for traffic light state task and board state.
+		xQueueSend( xFlowQueue, &flow_value, 0);
+		xQueueSend( BoardStateQueue, &board_state, 0);
 	}
 }
-/*-----------------------------------------------------------*/
 
-static void prvEventSemaphoreTask( void *pvParameters )
+/*-----------------------------------------------------------*/
+static void traffic_light_state_task( void *pvParameters )
 {
+	uint32_t board_state = 0;
+	uint32_t current_light_state = 0;
+	uint32_t flow_value = 0;
+	uint32_t default_delay = 2000;
+
+	int delay = 2000;
+
 	for( ;; )
 	{
-		/* Block until the semaphore is 'given'. */
-		xSemaphoreTake( xEventSemaphore, portMAX_DELAY );
+		vTaskDelay(delay);
+		xQueueReceive( BoardStateQueue, &board_state, portMAX_DELAY );
+		xQueueReceive( xFlowQueue, &flow_value, 0 );
+		current_light_state = board_state & light_state;
 
-		/* Count the number of times the semaphore is received. */
-		ulCountOfReceivedSemaphores++;
+		switch(current_light_state){
+			case green:
+				current_light_state = yellow;
+				vTaskDelay(delay + (flow_value*100));
+				break;
+			case yellow:
+				current_light_state = red;
+				vTaskDelay(default_delay);
+				break;
+			case red:
+				current_light_state = green;
+				vTaskDelay(delay - (flow_value*100));
+				break;
+			default:
+				printf("error\n");
+				break;
+		}
+
+		board_state = (board_state & ALL_TRAFFIC) | current_light_state;
+		char light = display_lights(current_light_state);
+
+		xQueueSend(BoardStateQueue, &board_state, portMAX_DELAY);
+
 	}
-}
-/*-----------------------------------------------------------*/
+/*
+		 Do not wait if there is nothing in queue
+		xQueueReceive( xFlowQueue, &flow_value, 0 );
 
-void vApplicationTickHook( void )
-{
-portBASE_TYPE xHigherPriorityTaskWoken = pdFALSE;
-static uint32_t ulCount = 0;
+		//wait to get the current state of traffic
+		xQueueReceive( BoardStateQueue, &board_state, portMAX_DELAY );
 
-	/* The RTOS tick hook function is enabled by setting configUSE_TICK_HOOK to
-	1 in FreeRTOSConfig.h.
+		current_light_state = board_state & light_state;
 
-	"Give" the semaphore on every 500th tick interrupt. */
-	ulCount++;
-	if( ulCount >= 500UL )
-	{
-		/* This function is called from an interrupt context (the RTOS tick
-		interrupt),	so only ISR safe API functions can be used (those that end
-		in "FromISR()".
+		char light = display_lights(current_light_state);
 
-		xHigherPriorityTaskWoken was initialised to pdFALSE, and will be set to
-		pdTRUE by xSemaphoreGiveFromISR() if giving the semaphore unblocked a
-		task that has equal or higher priority than the interrupted task.
-		http://www.freertos.org/a00124.html */
-		xSemaphoreGiveFromISR( xEventSemaphore, &xHigherPriorityTaskWoken );
-		ulCount = 0UL;
-	}
+		switch(current_light_state){
+			case red:
+				if(flow_value > old_flow_value){
+					//flow increasing, decrease red light duration.
+					delay -= (flow_value - old_flow_value) * 100;
+				}else if(flow_value < old_flow_value){
+					//flow decreasing
+					delay += (flow_value - old_flow_value) * 100;
+				}else{
+					//pass
+				}
+			case green:
+				if(flow_value > old_flow_value){
+					//flow increasing, decrease red light duration.
+					delay -= (flow_value - old_flow_value) * 100;
+				}else if(flow_value < old_flow_value){
+					//flow decreasing
+					delay += (flow_value - old_flow_value) * 100;
+				}else{
+					//pass
+				}
+		}
 
-	/* If xHigherPriorityTaskWoken is pdTRUE then a context switch should
-	normally be performed before leaving the interrupt (because during the
-	execution of the interrupt a task of equal or higher priority than the
-	running task was unblocked).  The syntax required to context switch from
-	an interrupt is port dependent, so check the documentation of the port you
-	are using.  http://www.freertos.org/a00090.html
+		old_flow_value = flow_value;
+		delay -= 200;
 
-	In this case, the function is running in the context of the tick interrupt,
-	which will automatically check for the higher priority task to run anyway,
-	so no further action is required. */
-}
-/*-----------------------------------------------------------*/
+		if(delay > 0){
+			//light not finished, put the board state back
+			xQueueSend(BoardStateQueue, &board_state, portMAX_DELAY);
+			vTaskDelay(delay);
+		}else if(delay < 0){
+			//change light
+				if(current_light_state == yellow){
+					current_light_state = red;
+				}else if(current_light_state == green){
+					//turn yellow:
+					flow_value = 0;
+					current_light_state = yellow;
+				}else if(current_light_state == red){
+					//turn green:
+					current_light_state = green;
+				}
+			}
 
-void vApplicationMallocFailedHook( void )
-{
-	/* The malloc failed hook is enabled by setting
-	configUSE_MALLOC_FAILED_HOOK to 1 in FreeRTOSConfig.h.
+			//give new board state.
+			board_state = (board_state & ALL_TRAFFIC) | current_light_state;
+			char afterlight = display_lights(current_light_state);
 
-	Called if a call to pvPortMalloc() fails because there is insufficient
-	free memory available in the FreeRTOS heap.  pvPortMalloc() is called
-	internally by FreeRTOS API functions that create tasks, queues, software
-	timers, and semaphores.  The size of the FreeRTOS heap is set by the
-	configTOTAL_HEAP_SIZE configuration constant in FreeRTOSConfig.h. */
-	for( ;; );
-}
-/*-----------------------------------------------------------*/
-
-void vApplicationStackOverflowHook( xTaskHandle pxTask, signed char *pcTaskName )
-{
-	( void ) pcTaskName;
-	( void ) pxTask;
-
-	/* Run time stack overflow checking is performed if
-	configconfigCHECK_FOR_STACK_OVERFLOW is defined to 1 or 2.  This hook
-	function is called if a stack overflow is detected.  pxCurrentTCB can be
-	inspected in the debugger if the task name passed into this function is
-	corrupt. */
-	for( ;; );
-}
-/*-----------------------------------------------------------*/
-
-void vApplicationIdleHook( void )
-{
-volatile size_t xFreeStackSpace;
-
-	/* The idle task hook is enabled by setting configUSE_IDLE_HOOK to 1 in
-	FreeRTOSConfig.h.
-
-	This function is called on each cycle of the idle task.  In this case it
-	does nothing useful, other than report the amount of FreeRTOS heap that
-	remains unallocated. */
-	xFreeStackSpace = xPortGetFreeHeapSize();
-
-	if( xFreeStackSpace > 100 )
-	{
-		/* By now, the kernel has allocated everything it is going to, so
-		if there is a lot of heap remaining unallocated then
-		the value of configTOTAL_HEAP_SIZE in FreeRTOSConfig.h can be
-		reduced accordingly. */
-	}
+			xQueueSend(BoardStateQueue, &board_state, portMAX_DELAY);
+			xQueueSend( xFlowQueue, &flow_value, 0);
+			delay = default_delay;
+		}
+*/
 }
 /*-----------------------------------------------------------*/
 
@@ -310,10 +333,9 @@ static void prvSetupHardware( void )
 	ADCInit();
 	ADC1->CR2 |= ADC_CR2_SWSTART;// start conversions
 
-	Clear_Init();
 	SPIInit();
-	Clear_ShiftRegisters();
+	TIM4Init();
+	Set_PD7();
 	/* TODO: Setup the clocks, etc. here, if they were not configured before
 	main() was called. */
 }
-
