@@ -1,106 +1,76 @@
 /* Standard includes. */
-#include "IncludeFile.h"
+#include <stdint.h>
+#include "stm32f4_discovery.h"
+#include "middleware.h"
 
-/* Priorities at which the tasks are created. */
-#define mainQUEUE_RECEIVE_TASK_PRIORITY		( tskIDLE_PRIORITY + 2 )
-#define	mainQUEUE_SEND_TASK_PRIORITY		( tskIDLE_PRIORITY + 1 )
-#define mainEVENT_SEMAPHORE_TASK_PRIORITY	( configMAX_PRIORITIES - 1 )// configMAX_PRIORITIES = 5
+/* Kernel includes. */
+#include "stm32f4xx.h"
+#include "../FreeRTOS_Source/include/FreeRTOS.h"
+#include "../FreeRTOS_Source/include/queue.h"
+#include "../FreeRTOS_Source/include/semphr.h"
+#include "../FreeRTOS_Source/include/task.h"
+#include "../FreeRTOS_Source/include/timers.h"
 
-/* The rate at which data is sent to the queue, specified in milliseconds, and
-converted to ticks using the portTICK_RATE_MS constant. */
-#define mainQUEUE_SEND_PERIOD_MS			( 200 / portTICK_RATE_MS )
-
-
-/* The number of items the queue can hold.  This is 1 as the receive task
-will remove items as they are added, meaning the send task should always find
-the queue empty. */
+#define mainSOFTWARE_TIMER_PERIOD_MS		( 1000 / portTICK_RATE_MS ) /* 1 sec */
 #define mainQUEUE_LENGTH					( 1 )
 
-/*-----------------------------------------------------------*/
-/*							Prototypes						*/
+/* Prototypes */
 static void prvSetupHardware( void );
+static void Traffic_Flow_Adjustment_Task( void *pvParameters );
+static void Traffic_Generator_Task( void *pvParameters );
+static void Traffic_Light_State_Task( void *pvParameters );
+static void System_Display_Task( void *pvParameters );
+static void vTrafficLight_Callback( xTimerHandle xTimer );
 
-static void traffic_generator_task( void *pvParameters );
-static void pot_read_task( void *pvParameters );
-static void led_display_task( void *pvParameters );
-static void traffic_light_state_task( void *pvParameters );
-
-/*-----------------------------------------------------------*/
-
-/* The queue used by the queue send and queue receive tasks. */
-static xQueueHandle xQueue = NULL;
+/* Queues */
+static xQueueHandle xPotResistanceQueue = NULL;
 static xQueueHandle xFlowQueue = NULL;
-static xQueueHandle BoardStateQueue = NULL;
+static xQueueHandle xBoardStateQueue = NULL;
 
-/* The semaphore (in this case binary) that is used by the FreeRTOS tick hook
- * function and the event semaphore task.
- */
-static xSemaphoreHandle xEventSemaphore = NULL;
 /*-----------------------------------------------------------*/
 
 int main(void)
 {
-	/* Configure the system ready to run the demo.  The clock configuration
-	can be done here if it was not done before main() was called. */
+	/* Setup the hardware peripherals */
 	prvSetupHardware();
 
-	/* Create the queue used by the queue send and queue receive tasks.
-	http://www.freertos.org/a00116.html */
-	xQueue = xQueueCreate( 	mainQUEUE_LENGTH,		/* The number of items the queue can hold. */
-							sizeof( uint32_t ) );	/* The size of each item the queue holds. */
-	/* Add to the registry, for the benefit of kernel aware debugging. */
-	vQueueAddToRegistry( xQueue, "MainQueue" );
+	/* @arg1: queue length | @arg2: size of one element */
+	xPotResistanceQueue = xQueueCreate( mainQUEUE_LENGTH, sizeof( uint32_t ) );
+	xFlowQueue = xQueueCreate( 	mainQUEUE_LENGTH, sizeof( uint32_t ) );
+	xBoardStateQueue = xQueueCreate( 	mainQUEUE_LENGTH, sizeof( uint32_t ) );
 
-	xFlowQueue = xQueueCreate( 	mainQUEUE_LENGTH,		/* The number of items the queue can hold. */
-							sizeof( uint32_t ) );	/* The size of each item the queue holds. */
+	/* Add to the registry, for the benefit of kernel aware debugging. */
+	vQueueAddToRegistry( xPotResistanceQueue, "PotQueue" );
 	vQueueAddToRegistry( xFlowQueue, "FlowQueue" );
+	vQueueAddToRegistry( xBoardStateQueue, "BoardStateQueue" );
 
-
-	BoardStateQueue = xQueueCreate( 	mainQUEUE_LENGTH,		/* The number of items the queue can hold. */
-							sizeof( uint32_t ) );	/* The size of each item the queue holds. */
-	vQueueAddToRegistry( BoardStateQueue, "BoardStateQueue" );
-
-	/* Create the semaphore used by the FreeRTOS tick hook function and the
-	event semaphore task. */
-	vSemaphoreCreateBinary( xEventSemaphore );
-	/* Add to the registry, for the benefit of kernel aware debugging. */
-	vQueueAddToRegistry( xEventSemaphore, "xEventSemaphore" );
-
-	/* Create the queue receive task as described in the comments at the top
-	of this	file.  http://www.freertos.org/a00125.html */
-	xTaskCreate( 	traffic_generator_task,			/* The function that implements the task. */
-					"traffic_gen_task", 		/* Text name for the task, just to help debugging. */
+	/* Create the tasks */
+	xTaskCreate( 	Traffic_Generator_Task,			/* The function that implements the task. */
+					"Generator_Task", 			/* Text name for the task, just to help debugging. */
 					configMINIMAL_STACK_SIZE, 		/* The size (in words) of the stack that should be created for the task. */
-					NULL, 							/* A parameter that can be passed into the task.  Not used in this simple demo. */
-					mainQUEUE_RECEIVE_TASK_PRIORITY,/* The priority to assign to the task.  tskIDLE_PRIORITY (which is 0) is the lowest priority.  configMAX_PRIORITIES - 1 is the highest priority. */
-					NULL );							/* Used to obtain a handle to the created task.  Not used in this simple demo, so set to NULL. */
+					NULL, 							/* A parameter that can be passed into the task. */
+					configMAX_PRIORITIES,			/* The priority to assign to the task. */
+					NULL );							/* Used to obtain a handle to the created task.  */
 
-
-	/* Create the queue send task in exactly the same way.  Again, this is
-	described in the comments at the top of the file. */
-	xTaskCreate( 	pot_read_task,
-					"pot_read_task",
+	xTaskCreate( 	Traffic_Flow_Adjustment_Task,
+					"Flow_Adjustment_Task",
 					configMINIMAL_STACK_SIZE,
 					NULL,
-					mainQUEUE_SEND_TASK_PRIORITY,
+					configMAX_PRIORITIES,
 					NULL );
 
-	/* Create the queue send task in exactly the same way.  Again, this is
-	described in the comments at the top of the file. */
-	xTaskCreate( 	traffic_light_state_task,
-					"light_state_task",
+	xTaskCreate( 	Traffic_Light_State_Task,
+					"Light_State_Task",
 					configMINIMAL_STACK_SIZE,
 					NULL,
-					mainQUEUE_SEND_TASK_PRIORITY,
+					configMAX_PRIORITIES,
 					NULL );
 
-	/* Create the queue send task in exactly the same way.  Again, this is
-	described in the comments at the top of the file. */
-	xTaskCreate( 	led_display_task,
-					"led_state_task",
+	xTaskCreate( 	System_Display_Task,
+					"Board_State_Task",
 					configMINIMAL_STACK_SIZE,
 					NULL,
-					mainQUEUE_SEND_TASK_PRIORITY,
+					configMAX_PRIORITIES,
 					NULL );
 
 	/* Start the tasks and timer running. */
@@ -113,55 +83,82 @@ int main(void)
 	for more details.  http://www.freertos.org/a00111.html */
 	for( ;; );
 }
+
 /*-----------------------------------------------------------*/
-
-static void led_display_task( void *pvParameters ){
-
-	uint32_t board_state = 0;
-
-	for( ;; ){
-		vTaskDelay(500);
-		Set_PD7();
-		xQueueReceive( BoardStateQueue, &board_state, portMAX_DELAY);
-		//we only want the first 4 bits of the board upper
-		uint16_t board_upper_bottom = (board_state & 0xFFFF0000) >> 16;
-		//board lower consists of the important 16 bits
-		uint16_t board_lower = board_state & 0xFFFF;
-		SPI_Bus_tx(board_upper_bottom);
-		vTaskDelay(5);
-		SPI_Bus_tx(board_lower);
-
-		xQueueSend( BoardStateQueue, &board_state, portMAX_DELAY);
-	}
-	// Basically, we are assuming the highway is 32 cars long, but
-	// we are only looking at the first 19 cars.
-}
-
-static void pot_read_task( void *pvParameters )
+static void Traffic_Flow_Adjustment_Task( void *pvParameters )
 {
 
 	for( ;; )
 	{
-//		write_LED();
-		/* Place this task in the blocked state until it is time to run again.
-		The block time is specified in ticks, the constant used converts ticks
-		to ms.  While in the Blocked state this task will not consume any CPU
-		time.  http://www.freertos.org/vtaskdelayuntil.html */
-		vTaskDelay(250);
+		vTaskDelay(100);
+		uint32_t adc_val = read_adc();
+		xQueueSend( xPotResistanceQueue, &adc_val, 0 );
+	}
+}
+/*-----------------------------------------------------------*/
+uint32_t new_car(uint32_t traffic_value){
 
-		//uint32_t adc_val = read_adc();
-		//adv_val = (adc_max - adc_val)/(adc_val) --> generate relative value
-		uint32_t adc_val = 3; //med-low traffic.
+	int value = rand() % 4096;
 
-		/* Send to the queue - causing the queue receive task to unblock and
-		increment its counter.  0 is used as the block time so the sending
-		operation will not block - it shouldn't need to block as the queue
-		should always be empty at this point in the code. */
-		xQueueSend( xQueue, &adc_val, 0 );
+	if(traffic_value > 3796){
+		value = rand() % 6;
+		if(value == 1){
+			return 1;
+		}else{
+			return 0;
+		}
+	}else{
+		if (value < (4096 - traffic_value)){
+			return 1;
+		}else{
+			return 0;
+		}
 	}
 }
 
-char display_lights(uint32_t lights){
+uint32_t generate_traffic(uint32_t traffic_value, uint32_t STATE_TRAFFIC){
+	uint32_t upper_cars = (STATE_TRAFFIC)&CLEARED_TRAFFIC;
+	uint32_t approaching_cars = (STATE_TRAFFIC)&APPROACHING_TRAFFIC;
+
+	upper_cars = upper_cars << 0b1;
+
+	if(STATE_TRAFFIC & green){
+		approaching_cars = approaching_cars << 0b1;
+	}else{
+		if(approaching_cars & (1 << 7)){
+			//car in the front, skip.
+			//find first zero
+			int i;
+			for(i = 6; i > 0; i--){
+				if((approaching_cars & (1 << i)) == 0){
+					//shift lower i - 1 bits
+					int j, temp = 0;
+					for(j = 0; j < i; j++){
+						temp = temp | (1 << j);
+					}
+
+					uint8_t lower = approaching_cars & temp;
+					lower = lower << 1;
+					uint8_t upper = (approaching_cars & (0xFF & ~temp));
+
+					approaching_cars = upper + lower;
+					break;
+				}
+			}
+		}else{
+			approaching_cars = approaching_cars << 0b1;
+		}
+	}
+
+	//generate new car
+	uint32_t car = new_car(traffic_value);
+
+	STATE_TRAFFIC = (upper_cars & CLEARED_TRAFFIC) | (approaching_cars) | car;
+
+	return STATE_TRAFFIC;
+}
+
+char display_lights_debug(uint32_t lights){
 	//debugging purposes//
 	switch(lights){
 		case green:
@@ -175,29 +172,31 @@ char display_lights(uint32_t lights){
 	}
 }
 
-static void traffic_generator_task( void *pvParameters )
+static void Traffic_Generator_Task( void *pvParameters )
 {
 	uint32_t traffic_val = 3;
-	uint32_t flow_value = 0;
+	int32_t flow_value = 0;
+
 	uint32_t board_state = red;
 	uint32_t lights = red;
-	xQueueSend( BoardStateQueue, &board_state, 0);
+	xQueueSend( xBoardStateQueue, &board_state, 0);
+	vTaskDelay(50);
 
 	for( ;; )
 	{
-		vTaskDelay(250);
+		vTaskDelay(500);
 		/* Wait until something arrives in the queue - this task will block
 		indefinitely provided INCLUDE_vTaskSuspend is set to 1 in
 		FreeRTOSConfig.h.  http://www.freertos.org/a00118.html */
-		xQueueReceive( xQueue, &traffic_val, 0);
+		xQueueReceive( xPotResistanceQueue, &traffic_val, 0);
 		xQueueReceive( xFlowQueue, &flow_value, 0);
 
 		//Traffic value pulled off the queue, which is the value of the potentiometer.
-		xQueueReceive( BoardStateQueue, &board_state, portMAX_DELAY);
+		xQueueReceive( xBoardStateQueue, &board_state, portMAX_DELAY);
 		uint32_t traffic = generate_traffic(traffic_val, board_state);
 
 		lights = board_state & light_state;
-		char lights_value = display_lights(lights);
+		char lights_value = display_lights_debug(lights);
 
 		board_state = (lights) | traffic;
 
@@ -208,134 +207,140 @@ static void traffic_generator_task( void *pvParameters )
 			flow_value--;
 		}
 
-		printf("Lights: %c Flow: %lu Traffic: %lu\n", lights_value, flow_value, traffic);
+		printf("Lights: %c Flow: %i Traffic: %u\n", lights_value, flow_value, traffic);
 
 		//send flow value for traffic light state task and board state.
 		xQueueSend( xFlowQueue, &flow_value, 0);
-		xQueueSend( BoardStateQueue, &board_state, 0);
+		xQueueSend( xBoardStateQueue, &board_state, 0);
 	}
 }
-
 /*-----------------------------------------------------------*/
-static void traffic_light_state_task( void *pvParameters )
+static void vTrafficLight_Callback( xTimerHandle xTrafficLight )
 {
 	uint32_t board_state = 0;
-	uint32_t current_light_state = 0;
-	uint32_t flow_value = 0;
-	uint32_t default_delay = 2000;
 
-	int delay = 2000;
+	xQueueReceive( xBoardStateQueue, &board_state, portMAX_DELAY );
 
+	uint32_t current_light_state = board_state & light_state;
+
+	switch(current_light_state){
+		case green:
+			current_light_state = yellow;
+			break;
+		case yellow:
+			current_light_state = red;
+			break;
+		case red:
+			current_light_state = green;
+			break;
+		default:
+			printf("light error\n");
+			break;
+	}
+
+	board_state = current_light_state | (board_state & ALL_TRAFFIC);
+
+	xQueueSend( xBoardStateQueue, &board_state, portMAX_DELAY );
+}
+
+static void Traffic_Light_State_Task( void *pvParameters )
+{
+	xTimerHandle xTrafficLightTimer = NULL;
+	uint32_t default_delay = mainSOFTWARE_TIMER_PERIOD_MS * 4;
+	xTrafficLightTimer = xTimerCreate(	"TrafficLightTimer", 	/* A text name, purely to help debugging. */
+										default_delay,			/* (4s). */
+										pdFALSE,				/* This is a periodic timer, so xAutoReload is set to pdTRUE. */
+										( void * ) 0,			/* The ID is not used, so can be set to anything. */
+										vTrafficLight_Callback	/* The callback function that switches the LED off. */
+										);
+
+	int32_t flow_value = 0;
+	uint32_t board_state = 0;
+	int32_t new_green_time = default_delay;
+	int32_t new_red_time = default_delay;
+	int delay = 100;
+
+	xTimerStart( xTrafficLightTimer, 0);
 	for( ;; )
 	{
 		vTaskDelay(delay);
-		xQueueReceive( BoardStateQueue, &board_state, portMAX_DELAY );
-		xQueueReceive( xFlowQueue, &flow_value, 0 );
-		current_light_state = board_state & light_state;
+		//set the timer period according to current light state and flow value.
 
-		switch(current_light_state){
-			case green:
-				current_light_state = yellow;
-				vTaskDelay(delay + (flow_value*100));
-				break;
-			case yellow:
-				current_light_state = red;
-				vTaskDelay(default_delay);
-				break;
-			case red:
-				current_light_state = green;
-				vTaskDelay(delay - (flow_value*100));
-				break;
-			default:
-				printf("error\n");
-				break;
-		}
-
-		board_state = (board_state & ALL_TRAFFIC) | current_light_state;
-		char light = display_lights(current_light_state);
-
-		xQueueSend(BoardStateQueue, &board_state, portMAX_DELAY);
-
-	}
-/*
-		 Do not wait if there is nothing in queue
+		xQueueReceive( xBoardStateQueue, &board_state, portMAX_DELAY );
 		xQueueReceive( xFlowQueue, &flow_value, 0 );
 
-		//wait to get the current state of traffic
-		xQueueReceive( BoardStateQueue, &board_state, portMAX_DELAY );
+		uint32_t current_light_state = board_state & light_state;
 
-		current_light_state = board_state & light_state;
+		//wait until timer finished.
+		 if( xTimerIsTimerActive( xTrafficLightTimer ) == pdFALSE ){
+			switch(current_light_state){
+				case green:
+					//increase green time if flow is positive
 
-		char light = display_lights(current_light_state);
+					new_green_time = default_delay + (flow_value * 500);
 
-		switch(current_light_state){
-			case red:
-				if(flow_value > old_flow_value){
-					//flow increasing, decrease red light duration.
-					delay -= (flow_value - old_flow_value) * 100;
-				}else if(flow_value < old_flow_value){
-					//flow decreasing
-					delay += (flow_value - old_flow_value) * 100;
-				}else{
-					//pass
-				}
-			case green:
-				if(flow_value > old_flow_value){
-					//flow increasing, decrease red light duration.
-					delay -= (flow_value - old_flow_value) * 100;
-				}else if(flow_value < old_flow_value){
-					//flow decreasing
-					delay += (flow_value - old_flow_value) * 100;
-				}else{
-					//pass
-				}
-		}
+					if(new_green_time > default_delay * 2){
+						//if more than double, set to double.
+						new_green_time = default_delay * 2;
+					}else if(new_green_time < default_delay / 2){
+						new_green_time = default_delay / 2;
+					}
 
-		old_flow_value = flow_value;
-		delay -= 200;
+					xTimerChangePeriod(xTrafficLightTimer, new_green_time, 0);
+					break;
 
-		if(delay > 0){
-			//light not finished, put the board state back
-			xQueueSend(BoardStateQueue, &board_state, portMAX_DELAY);
-			vTaskDelay(delay);
-		}else if(delay < 0){
-			//change light
-				if(current_light_state == yellow){
-					current_light_state = red;
-				}else if(current_light_state == green){
-					//turn yellow:
-					flow_value = 0;
-					current_light_state = yellow;
-				}else if(current_light_state == red){
-					//turn green:
-					current_light_state = green;
-				}
+				case yellow:
+					//going to change red, set red delay
+					xTimerChangePeriod(xTrafficLightTimer, default_delay/2, 0);
+					break;
+
+				case red:
+					new_red_time = default_delay - (flow_value * 500);
+
+					if(new_red_time > default_delay * 2){
+						//if more than double, set to double.
+						new_red_time = default_delay * 2;
+					}else if(new_red_time < default_delay / 2){
+						new_red_time = default_delay / 2;
+					}
+
+					//going to change green, set green delay
+					xTimerChangePeriod(xTrafficLightTimer, new_red_time, 0);
+					break;
+				default:
+					printf("light task error\n");
+					break;
+
 			}
-
-			//give new board state.
-			board_state = (board_state & ALL_TRAFFIC) | current_light_state;
-			char afterlight = display_lights(current_light_state);
-
-			xQueueSend(BoardStateQueue, &board_state, portMAX_DELAY);
-			xQueueSend( xFlowQueue, &flow_value, 0);
-			delay = default_delay;
+			flow_value = 0;
 		}
-*/
+
+		xQueueSend( xBoardStateQueue, &board_state, portMAX_DELAY);
+		xQueueSend( xFlowQueue, &flow_value, portMAX_DELAY);
+	}
 }
 /*-----------------------------------------------------------*/
-
+static void System_Display_Task( void *pvParameters ){
+	uint32_t board_state = 0;
+	for( ;; ){
+		vTaskDelay(500);
+		xQueueReceive( xBoardStateQueue, &board_state, portMAX_DELAY);
+		//we only want the first 6 bits of the board upper
+		uint16_t board_upper = (board_state & 0x3F0000) >> 16;
+		uint16_t board_lower = (board_state & 0xFFFF);
+		SPI_Bus_tx(board_upper);
+		vTaskDelay(1);
+		SPI_Bus_tx(board_lower);
+		xQueueSend( xBoardStateQueue, &board_state, portMAX_DELAY);
+	}
+}
+/*-----------------------------------------------------------*/
+/* Setup the STM32F4 Hardware	*/
 static void prvSetupHardware( void )
 {
 	/* Ensure all priority bits are assigned as preemption priority bits.
 	http://www.freertos.org/RTOS-Cortex-M3-M4.html */
 	NVIC_SetPriorityGrouping( 0 );
-	//TASK 3 - ADC Conversions
-	ADCInit();
-	ADC1->CR2 |= ADC_CR2_SWSTART;// start conversions
-
-	SPIInit();
-	TIM4Init();
-	Set_PD7();
-	/* TODO: Setup the clocks, etc. here, if they were not configured before
-	main() was called. */
+	ADCInit();/* PA1 */
+	SPIInit();/* PA5 = clock | PA7 = Output */
 }
