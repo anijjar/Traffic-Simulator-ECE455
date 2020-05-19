@@ -1,3 +1,10 @@
+/*
+	Project: Traffic Light Simulator
+	Developers: Daniel MacRae & Aman Nijjar
+	Summary: Model a single lane, one-way traffic system using the FreeRTOS framework.
+
+*/
+
 /* Standard includes. */
 #include <stdint.h>
 #include "stm32f4_discovery.h"
@@ -11,7 +18,10 @@
 #include "../FreeRTOS_Source/include/task.h"
 #include "../FreeRTOS_Source/include/timers.h"
 
+/* Timer period is 1 second */
 #define mainSOFTWARE_TIMER_PERIOD_MS		( 1000 / portTICK_RATE_MS ) /* 1 sec */
+
+/* Length of the main queue is 1 index */
 #define mainQUEUE_LENGTH					( 1 )
 
 /* Prototypes */
@@ -22,7 +32,11 @@ static void Traffic_Light_State_Task( void *pvParameters );
 static void System_Display_Task( void *pvParameters );
 static void vTrafficLight_Callback( xTimerHandle xTimer );
 
-/* Queues */
+/* Queues 
+		xPotResistanceQueue : contains the potentiometer resistance value
+		xFlowQueue : contains the calculated flow value (heavy traffic = low)
+
+*/
 static xQueueHandle xPotResistanceQueue = NULL;
 static xQueueHandle xFlowQueue = NULL;
 static xQueueHandle xBoardStateQueue = NULL;
@@ -46,7 +60,7 @@ int main(void)
 
 	/* Create the tasks */
 	xTaskCreate( 	Traffic_Generator_Task,			/* The function that implements the task. */
-					"Generator_Task", 			/* Text name for the task, just to help debugging. */
+					"Generator_Task", 				/* Text name for the task, just to help debugging. */
 					configMINIMAL_STACK_SIZE, 		/* The size (in words) of the stack that should be created for the task. */
 					NULL, 							/* A parameter that can be passed into the task. */
 					configMAX_PRIORITIES,			/* The priority to assign to the task. */
@@ -85,13 +99,19 @@ int main(void)
 }
 
 /*-----------------------------------------------------------*/
+/*
+	@purpose: updates the potentiometer resistance in the 
+			  xPotResistanceQueue.
+	@args: NULL
+*/
 static void Traffic_Flow_Adjustment_Task( void *pvParameters )
 {
-
 	for( ;; )
 	{
 		vTaskDelay(100);
+		/* Read the ADC1 DR for the potentiometer resistance */
 		uint32_t adc_val = read_adc();
+		/* Update the xPotResistanceQueue with adc_val right away*/
 		xQueueSend( xPotResistanceQueue, &adc_val, 0 );
 	}
 }
@@ -117,11 +137,19 @@ uint32_t new_car(uint32_t traffic_value){
 }
 
 uint32_t generate_traffic(uint32_t traffic_value, uint32_t STATE_TRAFFIC){
+	/* Break the board state into an "upper" an "approaching" state. This will 
+	allow the traffic past the lights to keep moving, while the traffic approaching 
+	doesnt overflow. */
 	uint32_t upper_cars = (STATE_TRAFFIC)&CLEARED_TRAFFIC;
 	uint32_t approaching_cars = (STATE_TRAFFIC)&APPROACHING_TRAFFIC;
 
+	/* let upper traffic continue to make room for one approaching car */
 	upper_cars = upper_cars << 0b1;
 
+	/*if the light is green, then allow approaching cars to shift left one, 
+	  otherwise, if there is no car in front of the traffic light, then shift 
+	  all the cars, but if there is a car, find the first empty spot and shift 
+	  the cars to fill that spot. */
 	if(STATE_TRAFFIC & green){
 		approaching_cars = approaching_cars << 0b1;
 	}else{
@@ -150,9 +178,12 @@ uint32_t generate_traffic(uint32_t traffic_value, uint32_t STATE_TRAFFIC){
 		}
 	}
 
-	//generate new car
+	//Using the flow value, randomly determine if a car is generated
+	/* Note we are not using the True random number generator peripheral, 
+	   so the same flow value with potentiometer resistance will generate 
+	   the same number of cars. */
 	uint32_t car = new_car(traffic_value);
-
+	/* Create a new board state */
 	STATE_TRAFFIC = (upper_cars & CLEARED_TRAFFIC) | (approaching_cars) | car;
 
 	return STATE_TRAFFIC;
@@ -172,13 +203,22 @@ char display_lights_debug(uint32_t lights){
 	}
 }
 
+/*
+	@purpose: Generates the traffic to display and handles the shifting  
+			  logic. 
+	@args: NULL
+*/
 static void Traffic_Generator_Task( void *pvParameters )
-{
+{	
+	/* Initial values : start with no cars and red light*/
 	uint32_t traffic_val = 3;
 	int32_t flow_value = 0;
-
+	
+	/* "red" is a binary number defined in middleware.h */
 	uint32_t board_state = red;
 	uint32_t lights = red;
+
+	/* Send the red state to the xBoardStateQueue immediatly*/
 	xQueueSend( xBoardStateQueue, &board_state, 0);
 	vTaskDelay(50);
 
@@ -193,15 +233,23 @@ static void Traffic_Generator_Task( void *pvParameters )
 
 		//Traffic value pulled off the queue, which is the value of the potentiometer.
 		xQueueReceive( xBoardStateQueue, &board_state, portMAX_DELAY);
+		
+		/* Using the board_state and traffic_val values, the traffic variable will contain 
+		   the cars currently on the road. generate_traffic may or may not return a new car. */
 		uint32_t traffic = generate_traffic(traffic_val, board_state);
-
+		
+		/* Get the current light state to add to the board_state variable */
 		lights = board_state & light_state;
+		/* Used for debugging purposes on SWD, ignore */
 		char lights_value = display_lights_debug(lights);
 
+		/* The current LED state that will be displayed on the LEDs*/
 		board_state = (lights) | traffic;
 
+		/* increment the flow value if a new car was generated from generate_traffic 
+		   otherwise, decrement. The flow_value is used by the traffic_light_state_task 
+		   to increase/decrease the green/red light duration.*/
 		if(traffic & 1){
-			//new car, increment flow.
 			flow_value++;
 		}else{
 			flow_value--;
@@ -209,12 +257,14 @@ static void Traffic_Generator_Task( void *pvParameters )
 
 		printf("Lights: %c Flow: %i Traffic: %u\n", lights_value, flow_value, traffic);
 
-		//send flow value for traffic light state task and board state.
+		//send flow value for traffic light state task and board state to system display task
 		xQueueSend( xFlowQueue, &flow_value, 0);
 		xQueueSend( xBoardStateQueue, &board_state, 0);
 	}
 }
 /*-----------------------------------------------------------*/
+
+/* Callback for the software timer that will change the traffic light */
 static void vTrafficLight_Callback( xTimerHandle xTrafficLight )
 {
 	uint32_t board_state = 0;
@@ -243,8 +293,13 @@ static void vTrafficLight_Callback( xTimerHandle xTrafficLight )
 	xQueueSend( xBoardStateQueue, &board_state, portMAX_DELAY );
 }
 
+/*
+	@purpose: Updates the Traffic Light using the flow value
+	@args: NULL
+*/
 static void Traffic_Light_State_Task( void *pvParameters )
 {
+	/* Initialize a timer that will update the traffic lights, periodically.*/
 	xTimerHandle xTrafficLightTimer = NULL;
 	uint32_t default_delay = mainSOFTWARE_TIMER_PERIOD_MS * 4;
 	xTrafficLightTimer = xTimerCreate(	"TrafficLightTimer", 	/* A text name, purely to help debugging. */
@@ -320,6 +375,10 @@ static void Traffic_Light_State_Task( void *pvParameters )
 	}
 }
 /*-----------------------------------------------------------*/
+/*
+	@purpose: Display the board state variable using the SPI peripheral 
+	@args: NULL
+*/
 static void System_Display_Task( void *pvParameters ){
 	uint32_t board_state = 0;
 	for( ;; ){
@@ -329,6 +388,8 @@ static void System_Display_Task( void *pvParameters ){
 		uint16_t board_upper = (board_state & 0x3F0000) >> 16;
 		uint16_t board_lower = (board_state & 0xFFFF);
 		SPI_Bus_tx(board_upper);
+		/* Give time for the SPI bus to send the data since the register is 
+		   16-bits long.*/
 		vTaskDelay(1);
 		SPI_Bus_tx(board_lower);
 		xQueueSend( xBoardStateQueue, &board_state, portMAX_DELAY);
@@ -341,6 +402,6 @@ static void prvSetupHardware( void )
 	/* Ensure all priority bits are assigned as preemption priority bits.
 	http://www.freertos.org/RTOS-Cortex-M3-M4.html */
 	NVIC_SetPriorityGrouping( 0 );
-	ADCInit();/* PA1 */
-	SPIInit();/* PA5 = clock | PA7 = Output */
+	ADCInit(); /* PA1 */
+	SPIInit(); /* PA5 = clock | PA7 = Output */
 }
